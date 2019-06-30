@@ -7,7 +7,7 @@ Download code using `go get github.com/calumj/ebay-oauth-go-client`
 
 # How To Use 
 Initialise the credentials using `credentials.Load(<io.File>)`
-Once the credentials have been initalised, all further interations can be done using the API struct,  using `api := oauth.New()`
+Once the credentials have been initalised, all further interactions can be done using the API struct,  using `api := oauth.New()`
 
 ## Example Client Credentials
 ```
