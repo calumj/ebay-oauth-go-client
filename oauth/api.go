@@ -17,59 +17,53 @@ import (
 //API - oAuth api helper class
 type API struct {
 	appAccessMap sync.Map
+	credentials  credentials.Credentials
 }
 
 //New - returns API
-func New() *API {
+func New(credentials credentials.Credentials) *API {
 	return &API{
 		appAccessMap: sync.Map{},
+		credentials:  credentials,
 	}
 }
 
-//GetApplicationToken - returns a client credentials token
-func (a *API) GetApplicationToken(ctx context.Context, environment *environment.Environment, scopes ...string) (*oauth2.Token, error) {
+//GetApplicationTokenAndClient - returns a client credentials token and authenticated http client
+func (a *API) GetApplicationTokenAndClient(ctx context.Context, environment *environment.Environment, scopes ...string) (*oauth2.Token, *http.Client, error) {
 
-	if token, ok := a.appAccessMap.Load(environment); ok {
+	if ts, ok := a.appAccessMap.Load(environment); ok {
 		log.Debug("application access token returned from cache")
-		return token.(oauth2.TokenSource).Token()
+		tokenSource := ts.(oauth2.TokenSource)
+		token, err := tokenSource.Token()
+		if err != nil {
+			return nil, nil, fmt.Errorf("unable to generate token for %s environment: %s", environment.GetConfigIdentifier(), err.Error())
+		}
+
+		return token, oauth2.NewClient(ctx, tokenSource), nil
 	}
 
-	credentials := credentials.GetCredentials(environment)
+	credentials := a.credentials.GetCredentials(environment)
 	if credentials == nil {
-		return nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
+		return nil, nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
 	}
 
 	config := generateClientCredentialsConfig(credentials, environment, scopes)
 
-	ts := config.TokenSource(ctx)
+	tokenSource := config.TokenSource(ctx)
 
-	a.appAccessMap.Store(environment, ts)
+	a.appAccessMap.Store(environment, tokenSource)
 
-	token, err := ts.Token()
+	token, err := tokenSource.Token()
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("unable to generate token for %s environment: %s", environment.GetConfigIdentifier(), err.Error())
 	}
 
-	return token, nil
-}
-
-//GetApplicationClient - returns a http client with a refreshing credentials token in the transport
-func (a *API) GetApplicationClient(ctx context.Context, environment *environment.Environment, scopes ...string) (*http.Client, error) {
-	credentials := credentials.GetCredentials(environment)
-	if credentials == nil {
-		return nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
-	}
-
-	config := generateClientCredentialsConfig(credentials, environment, scopes)
-
-	client := config.Client(ctx)
-
-	return client, nil
+	return token, oauth2.NewClient(ctx, tokenSource), nil
 }
 
 //GenerateUserAuthorizationURL - returns authorization URL to send user to
 func (a *API) GenerateUserAuthorizationURL(ctx context.Context, environment *environment.Environment, state string, scopes ...string) (string, error) {
-	credentials := credentials.GetCredentials(environment)
+	credentials := a.credentials.GetCredentials(environment)
 	if credentials == nil {
 		return "", fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
 	}
@@ -80,59 +74,30 @@ func (a *API) GenerateUserAuthorizationURL(ctx context.Context, environment *env
 
 }
 
-//ExchangeCodeForAccessToken - exchange access token for oAuth token
-func (a *API) ExchangeCodeForAccessToken(ctx context.Context, environment *environment.Environment, code string) (*oauth2.Token, error) {
-	credentials := credentials.GetCredentials(environment)
+//ExchangeCodeForAccessTokenAndClient - exchange access token for oAuth token and authenticated http client
+func (a *API) ExchangeCodeForAccessTokenAndClient(ctx context.Context, environment *environment.Environment, code string) (*oauth2.Token, *http.Client, error) {
+	credentials := a.credentials.GetCredentials(environment)
 	if credentials == nil {
-		return nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
+		return nil, nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
 	}
 
 	config := generateAuthConfig(credentials, environment, nil)
-	return config.Exchange(ctx, code)
-
-}
-
-//ExchangeCodeForAccessClient - exchange access token for http client with oAuth token
-func (a *API) ExchangeCodeForAccessClient(ctx context.Context, environment *environment.Environment, code string) (*http.Client, error) {
-	credentials := credentials.GetCredentials(environment)
-	if credentials == nil {
-		return nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
+	token, err := config.Exchange(ctx, code)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to generate token for %s environment: %s", environment.GetConfigIdentifier(), err.Error())
 	}
 
-	token, err := a.ExchangeCodeForAccessToken(ctx, environment, code)
-	if err == nil {
-		return nil, err
-	}
-	config := generateAuthConfig(credentials, environment, nil)
-
-	return config.Client(ctx, token), nil
-
-}
-
-//GetAccessToken - get access token from refresh token
-func (a *API) GetAccessToken(ctx context.Context, environment *environment.Environment, refreshToken string, scopes ...string) (*oauth2.Token, error) {
-	credentials := credentials.GetCredentials(environment)
-	if credentials == nil {
-		return nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
-	}
-
-	config := generateAuthConfig(credentials, environment, scopes)
-
-	token := &oauth2.Token{
-		RefreshToken: refreshToken,
-		Expiry:       time.Now(),
-	}
 	tokenSource := config.TokenSource(ctx, token)
 
-	return tokenSource.Token()
+	return token, oauth2.NewClient(ctx, tokenSource), nil
 
 }
 
-//GetAccessTokenClient - get http client with access token from refresh token
-func (a *API) GetAccessTokenClient(ctx context.Context, environment *environment.Environment, refreshToken string, scopes ...string) (*http.Client, error) {
-	credentials := credentials.GetCredentials(environment)
+//GetAccessTokenAndClient - get token and authenticated http client with access token from refresh token
+func (a *API) GetAccessTokenAndClient(ctx context.Context, environment *environment.Environment, refreshToken string, scopes ...string) (*oauth2.Token, *http.Client, error) {
+	credentials := a.credentials.GetCredentials(environment)
 	if credentials == nil {
-		return nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
+		return nil, nil, fmt.Errorf("unable to retrieve credentials for %s environment", environment.GetConfigIdentifier())
 	}
 
 	config := generateAuthConfig(credentials, environment, scopes)
@@ -142,11 +107,18 @@ func (a *API) GetAccessTokenClient(ctx context.Context, environment *environment
 		Expiry:       time.Now(),
 	}
 
-	return config.Client(ctx, token), nil
+	tokenSource := config.TokenSource(ctx, token)
+
+	token, err := tokenSource.Token()
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to generate token for %s environment: %s", environment.GetConfigIdentifier(), err.Error())
+	}
+
+	return token, oauth2.NewClient(ctx, tokenSource), nil
 
 }
 
-func generateClientCredentialsConfig(credentials *credentials.Credentials, environment *environment.Environment, scopes []string) *clientcredentials.Config {
+func generateClientCredentialsConfig(credentials *credentials.Credential, environment *environment.Environment, scopes []string) *clientcredentials.Config {
 	return &clientcredentials.Config{
 		ClientID:     credentials.AppID,
 		ClientSecret: credentials.CertID,
@@ -155,7 +127,7 @@ func generateClientCredentialsConfig(credentials *credentials.Credentials, envir
 	}
 }
 
-func generateAuthConfig(credentials *credentials.Credentials, environment *environment.Environment, scopes []string) *oauth2.Config {
+func generateAuthConfig(credentials *credentials.Credential, environment *environment.Environment, scopes []string) *oauth2.Config {
 	return &oauth2.Config{
 		ClientID:     credentials.AppID,
 		ClientSecret: credentials.CertID,
