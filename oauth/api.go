@@ -28,6 +28,24 @@ func New(credentials credentials.Credentials) *API {
 	}
 }
 
+type applicationTokenSource struct {
+	source oauth2.TokenSource
+}
+
+func (a *applicationTokenSource) Token() (*oauth2.Token, error) {
+
+	token, err := a.source.Token()
+
+	if err != nil {
+		return nil, err
+	}
+
+	token.TokenType = ""
+
+	return token, nil
+
+}
+
 //GetApplicationTokenAndClient - returns a client credentials token and authenticated http client
 func (a *API) GetApplicationTokenAndClient(ctx context.Context, environment *environment.Environment, scopes ...string) (*oauth2.Token, *http.Client, error) {
 
@@ -49,7 +67,7 @@ func (a *API) GetApplicationTokenAndClient(ctx context.Context, environment *env
 
 	config := generateClientCredentialsConfig(credentials, environment, scopes)
 
-	tokenSource := config.TokenSource(ctx)
+	tokenSource := &applicationTokenSource{source: config.TokenSource(ctx)}
 
 	a.appAccessMap.Store(environment, tokenSource)
 
